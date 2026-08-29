@@ -93,17 +93,27 @@ cp gpu-setup/config.yaml src/config.yaml   # src/config.yaml est gitignoré
 cp gpu-setup/env.example .env
 ```
 
-> **Si `pip install -r requirements.txt` échoue.** Le `requirements.txt` hérité de l'amont
-> est encodé en **UTF-16** et épingle des versions anciennes (`ctranslate2==4.2.1`,
-> `faster-whisper==1.0.2`) qui ne se résolvent pas sur les Python récents.
-> [`gpu-setup/requirements-frozen.txt`](gpu-setup/requirements-frozen.txt) liste les
-> versions réellement en service ici, sous **Python 3.14.7** — utilisable directement :
-> `pip install -r gpu-setup/requirements-frozen.txt`.
+> **`requirements.txt` a été refait.** Celui hérité de l'amont était encodé en UTF-16 et
+> épinglait `ctranslate2==4.2.1` / `faster-whisper==1.0.2`, qui ne se résolvent plus sur les
+> Python récents : un clone neuf échouait dès le premier `pip install`. Il est conservé pour
+> mémoire sous `gpu-setup/requirements.upstream-utf16.txt`.
 >
-> `faster-whisper` et `ctranslate2` y figurent toujours alors que ce fork ne les charge
-> jamais (`main.py` saute `create_local_model()` quand `use_api: true`). Ils sont conservés
-> pour que le repli CPU (`use_api: false`) reste possible ; qui n'en veut pas peut les
-> retirer et économiser le téléchargement.
+> Deux dépendances méritent une mention, parce qu'elles sont invisibles à la lecture du code :
+>
+> - **`webrtcvad-wheels`**, et non `webrtcvad`. Le module importé s'appelle bien `webrtcvad`,
+>   mais le paquet qui le fournit avec des wheels précompilées est `webrtcvad-wheels`.
+>   `pip install webrtcvad` tente une compilation qui échoue sur Python 3.14.
+> - **`evdev`**, importé dynamiquement par `key_listener.py` et absent de tout import
+>   statique. La configuration livrée utilise `input_backend: evdev` : sans lui, le
+>   raccourci clavier ne répond pas.
+>
+> [`gpu-setup/requirements-frozen.txt`](gpu-setup/requirements-frozen.txt) donne le relevé
+> complet de l'environnement vérifié, sous Python 3.14.7.
+>
+> `faster-whisper` et `ctranslate2` restent listés bien que ce fork ne les charge jamais
+> (`main.py` saute `create_local_model()` quand `use_api: true`) : ils servent au repli CPU
+> (`use_api: false`). Qui n'en veut pas peut retirer les deux dernières lignes et économiser
+> le téléchargement.
 
 ### 4. Serveur en service utilisateur
 
@@ -190,7 +200,8 @@ D'où le commit `fix(transcription): join server segments`.
 | `systemd/whisper-server.service` | le service, avec tous les flags qui vont bien |
 | `scripts/serveur.sh` | lancement manuel sur le port 8090, pour expérimenter sans toucher au service |
 | `scripts/dictee.sh` | enregistre au micro et interroge le service, affiche texte et latence |
-| `requirements-frozen.txt` | les versions réellement en service, sous Python 3.14.7 |
+| `requirements-frozen.txt` | relevé complet de l'environnement vérifié (Python 3.14.7) |
+| `requirements.upstream-utf16.txt` | l'ancien fichier UTF-16 de l'amont, conservé pour mémoire |
 | `whisper-writer.desktop` | lanceur (chemin absolu à renseigner) |
 
 `OPENAI_API_KEY` est **volontairement vide** dans `env.example` : `whisper-server` ignore
