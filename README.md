@@ -34,13 +34,14 @@ WhisperWriter ──HTTP──> whisper-server (whisper.cpp + Vulkan) ──> GP
 Modèle `medium` quantifié q5_0, mesures prises sur le chemin `transcribe()` réel,
 meilleur de 3 exécutions.
 
-| Audio | CPU float32 (défaut amont) | CPU int8 | **GPU Vulkan** |
+| Audio | CPU float32 (défaut amont) | CPU int8 | **GPU Vulkan + VAD** |
 |---|---|---|---|
-| 3,97 s (dictée courte) | — | 3,94 s | **1,04 s** |
-| 14,94 s | 11,42 s | 5,85 s | **1,85 s** |
+| 3,97 s (dictée courte) | — | 3,94 s | **0,96 s** |
+| 14,94 s | 11,42 s | 5,85 s | **1,81 s** |
 | silence | — | — | **0,01 s** |
 
-Soit **×3,8** sur une dictée courte par rapport au CPU déjà optimisé en int8.
+Soit **×4,1** sur une dictée courte par rapport au CPU déjà optimisé en int8. La colonne GPU
+correspond exactement à la configuration livrée ici (`medium` q5_0, `--vad`, port 8089).
 
 Un repère utile : `whisper.cpp` **en CPU** met 6,96 s là où CTranslate2 int8 en met 3,94.
 Le gain vient donc bien du GPU, pas du changement de moteur — comparer au CPU de
@@ -91,6 +92,18 @@ pip install -r requirements.txt
 cp gpu-setup/config.yaml src/config.yaml   # src/config.yaml est gitignoré
 cp gpu-setup/env.example .env
 ```
+
+> **Si `pip install -r requirements.txt` échoue.** Le `requirements.txt` hérité de l'amont
+> est encodé en **UTF-16** et épingle des versions anciennes (`ctranslate2==4.2.1`,
+> `faster-whisper==1.0.2`) qui ne se résolvent pas sur les Python récents.
+> [`gpu-setup/requirements-frozen.txt`](gpu-setup/requirements-frozen.txt) liste les
+> versions réellement en service ici, sous **Python 3.14.7** — utilisable directement :
+> `pip install -r gpu-setup/requirements-frozen.txt`.
+>
+> `faster-whisper` et `ctranslate2` y figurent toujours alors que ce fork ne les charge
+> jamais (`main.py` saute `create_local_model()` quand `use_api: true`). Ils sont conservés
+> pour que le repli CPU (`use_api: false`) reste possible ; qui n'en veut pas peut les
+> retirer et économiser le téléchargement.
 
 ### 4. Serveur en service utilisateur
 
@@ -177,6 +190,7 @@ D'où le commit `fix(transcription): join server segments`.
 | `systemd/whisper-server.service` | le service, avec tous les flags qui vont bien |
 | `scripts/serveur.sh` | lancement manuel sur le port 8090, pour expérimenter sans toucher au service |
 | `scripts/dictee.sh` | enregistre au micro et interroge le service, affiche texte et latence |
+| `requirements-frozen.txt` | les versions réellement en service, sous Python 3.14.7 |
 | `whisper-writer.desktop` | lanceur (chemin absolu à renseigner) |
 
 `OPENAI_API_KEY` est **volontairement vide** dans `env.example` : `whisper-server` ignore
