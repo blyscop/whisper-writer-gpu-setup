@@ -130,3 +130,5 @@ dmypy.json
 
 # Configuration files
 config.yaml
+# le modèle de configuration livré par ce fork doit être versionné
+!gpu-setup/config.yaml

@@ -1,188 +1,207 @@
-# <img src="./assets/ww-logo.png" alt="WhisperWriter icon" width="25" height="25"> WhisperWriter
+# whisper-writer-gpu-setup
 
-![version](https://img.shields.io/badge/version-1.0.1-blue)
+Fork de [savbell/whisper-writer](https://github.com/savbell/whisper-writer) qui déporte la
+transcription sur le **GPU**, avec l'installation complète et reproductible qui va avec.
 
-<p align="center">
-    <img src="./assets/ww-demo-image-02.gif" alt="WhisperWriter demo gif" width="340" height="136">
-</p>
+Testé sur **EndeavourOS / Arch**, Wayland (Hyprland), **AMD Radeon 890M** (Strix Point,
+RDNA 3.5) — mais rien ici n'est spécifique à cette carte : tout GPU géré par Vulkan
+convient, y compris Intel et NVIDIA.
 
-**Update (2024-05-28):** I've just merged in a major rewrite of WhisperWriter! We've migrated from using `tkinter` to using `PyQt5` for the UI, added a new settings window for configuration, a new continuous recording mode, support for a local API, and more! Please be patient as I work out any bugs that may have been introduced in the process. If you encounter any problems, please [open a new issue](https://github.com/savbell/whisper-writer/issues)!
+## Pourquoi ce fork
 
-WhisperWriter is a small speech-to-text app that uses [OpenAI's Whisper model](https://openai.com/research/whisper) to auto-transcribe recordings from a user's microphone to the active window.
+WhisperWriter transcrit avec **faster-whisper**, dont le moteur **CTranslate2 n'a que CUDA
+comme backend GPU**. Sur une carte AMD ou Intel, aucun réglage de `device:` ou
+`compute_type:` ne peut atteindre le GPU — la transcription reste sur le CPU. Vérifiable :
 
-Once started, the script runs in the background and waits for a keyboard shortcut to be pressed (`ctrl+shift+space` by default). When the shortcut is pressed, the app starts recording from your microphone. There are four recording modes to choose from:
-- `continuous` (default): Recording will stop after a long enough pause in your speech. The app will transcribe the text and then start recording again. To stop listening, press the keyboard shortcut again.
-- `voice_activity_detection`: Recording will stop after a long enough pause in your speech. Recording will not start until the keyboard shortcut is pressed again.
-- `press_to_toggle` Recording will stop when the keyboard shortcut is pressed again. Recording will not start until the keyboard shortcut is pressed again.
-- `hold_to_record` Recording will continue until the keyboard shortcut is released. Recording will not start until the keyboard shortcut is held down again.
+```python
+import ctranslate2
+ctranslate2.get_cuda_device_count()              # 0
+ctranslate2.get_supported_compute_types('cpu')   # {'float32', 'int8', 'int8_float32'}
+```
 
-You can change the keyboard shortcut (`activation_key`) and recording mode in the [Configuration Options](#configuration-options). While recording and transcribing, a small status window is displayed that shows the current stage of the process (but this can be turned off). Once the transcription is complete, the transcribed text will be automatically written to the active window.
+La solution retenue n'est pas de patcher faster-whisper, mais de **changer de moteur** :
+`whisper.cpp` avec son backend Vulkan, lancé en serveur résident. WhisperWriter possède
+déjà un chemin client OpenAI (`transcribe_api`), et `whisper-server` sait exposer une route
+compatible — la bascule tient donc dans la configuration.
 
-The transcription can either be done locally through the [faster-whisper Python package](https://github.com/SYSTRAN/faster-whisper/) or through a request to [OpenAI's API](https://platform.openai.com/docs/guides/speech-to-text). By default, the app will use a local model, but you can change this in the [Configuration Options](#configuration-options). If you choose to use the API, you will need to either provide your OpenAI API key or change the base URL endpoint.
+```
+WhisperWriter ──HTTP──> whisper-server (whisper.cpp + Vulkan) ──> GPU
+   config.yaml            systemd --user, 127.0.0.1:8089
+```
 
-**Fun fact:** Almost the entirety of the initial release of the project was pair-programmed with [ChatGPT-4](https://openai.com/product/gpt-4) and [GitHub Copilot](https://github.com/features/copilot) using VS Code. Practically every line, including most of this README, was written by AI. After the initial prototype was finished, WhisperWriter was used to write a lot of the prompts as well!
+## Gains mesurés
 
-## Getting Started
+Modèle `medium` quantifié q5_0, mesures prises sur le chemin `transcribe()` réel,
+meilleur de 3 exécutions.
 
-### Prerequisites
-Before you can run this app, you'll need to have the following software installed:
+| Audio | CPU float32 (défaut amont) | CPU int8 | **GPU Vulkan** |
+|---|---|---|---|
+| 3,97 s (dictée courte) | — | 3,94 s | **1,04 s** |
+| 14,94 s | 11,42 s | 5,85 s | **1,85 s** |
+| silence | — | — | **0,01 s** |
 
-- Git: [https://git-scm.com/downloads](https://git-scm.com/downloads)
-- Python `3.11`: [https://www.python.org/downloads/](https://www.python.org/downloads/)
+Soit **×3,8** sur une dictée courte par rapport au CPU déjà optimisé en int8.
 
-If you want to run `faster-whisper` on your GPU, you'll also need to install the following NVIDIA libraries:
+Un repère utile : `whisper.cpp` **en CPU** met 6,96 s là où CTranslate2 int8 en met 3,94.
+Le gain vient donc bien du GPU, pas du changement de moteur — comparer au CPU de
+whisper.cpp gonflerait artificiellement le résultat.
 
-- [cuBLAS for CUDA 12](https://developer.nvidia.com/cublas)
-- [cuDNN 8 for CUDA 12](https://developer.nvidia.com/cudnn)
+## Installation
 
-<details>
-<summary>More information on GPU execution</summary>
-
-The below was taken directly from the [`faster-whisper` README](https://github.com/SYSTRAN/faster-whisper?tab=readme-ov-file#gpu):
-
-**Note:** The latest versions of `ctranslate2` support CUDA 12 only. For CUDA 11, the current workaround is downgrading to the `3.24.0` version of `ctranslate2` (This can be done with `pip install --force-reinsall ctranslate2==3.24.0`).
-
-There are multiple ways to install the NVIDIA libraries mentioned above. The recommended way is described in the official NVIDIA documentation, but we also suggest other installation methods below.
-
-#### Use Docker
-
-The libraries (cuBLAS, cuDNN) are installed in these official NVIDIA CUDA Docker images: `nvidia/cuda:12.0.0-runtime-ubuntu20.04` or `nvidia/cuda:12.0.0-runtime-ubuntu22.04`.
-
-#### Install with `pip` (Linux only)
-
-On Linux these libraries can be installed with `pip`. Note that `LD_LIBRARY_PATH` must be set before launching Python.
+### 1. Paquets système
 
 ```bash
-pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
-
-export LD_LIBRARY_PATH=`python3 -c 'import os; import nvidia.cublas.lib; import nvidia.cudnn.lib; print(os.path.dirname(nvidia.cublas.lib.__file__) + ":" + os.path.dirname(nvidia.cudnn.lib.__file__))'`
+sudo pacman -S --needed whisper-cpp ggml-vulkan vulkan-radeon
+sudo pacman -S --needed xdotool wtype dotool ydotool   # backends de frappe
 ```
 
-**Note**: Version 9+ of `nvidia-cudnn-cu12` appears to cause issues due its reliance on cuDNN 9 (Faster-Whisper does not currently support cuDNN 9). Ensure your version of the Python package is for cuDNN 8.
+`ggml-vulkan` *dépend* de `ggml` au lieu d'entrer en conflit avec lui : c'est un backend
+chargé au runtime, aucune recompilation n'est nécessaire. Remplacer `vulkan-radeon` par
+`vulkan-intel` ou `nvidia-utils` selon la carte.
 
-#### Download the libraries from Purfview's repository (Windows & Linux)
+Vérifier que la carte est vue : `vulkaninfo --summary | grep deviceName`
 
-Purfview's [whisper-standalone-win](https://github.com/Purfview/whisper-standalone-win) provides the required NVIDIA libraries for Windows & Linux in a [single archive](https://github.com/Purfview/whisper-standalone-win/releases/tag/libs). Decompress the archive and place the libraries in a directory included in the `PATH`.
+### 2. Modèles
 
-</details>
+```bash
+mkdir -p ~/.local/share/whisper-cpp && cd ~/.local/share/whisper-cpp
 
-### Installation
-To set up and run the project, follow these steps:
+# modèle de transcription (514 Mo)
+curl -LO https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin
 
-#### 1. Clone the repository:
-
-```
-git clone https://github.com/savbell/whisper-writer
-cd whisper-writer
-```
-
-#### 2. Create a virtual environment and activate it:
-
-```
-python -m venv venv
-
-# For Linux and macOS:
-source venv/bin/activate
-
-# For Windows:
-venv\Scripts\activate
+# modèle VAD, indispensable contre les hallucinations (0,8 Mo)
+curl -LO https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
 ```
 
-#### 3. Install the required packages:
+Autres modèles sur [huggingface.co/ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp/tree/main).
+`ggml-large-v3-turbo-q5_0.bin` (547 Mo) a été testé : plus précis pour une vitesse
+équivalente, c'est une bonne alternative.
 
-```
+**Les modèles faster-whisper déjà en cache ne servent à rien ici** — ils sont au format
+CTranslate2, il faut du GGML.
+
+### 3. Application
+
+```bash
+git clone https://github.com/blyscop/whisper-writer-gpu-setup.git ~/whisper-writer
+cd ~/whisper-writer
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
+
+cp gpu-setup/config.yaml src/config.yaml   # src/config.yaml est gitignoré
+cp gpu-setup/env.example .env
 ```
 
-#### 4. Run the Python code:
+### 4. Serveur en service utilisateur
 
+```bash
+cp gpu-setup/systemd/whisper-server.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now whisper-server.service
+curl -s http://127.0.0.1:8089/v1/health     # {"status":"ok"}
 ```
-python run.py
+
+Confirmer que le GPU est bien pris :
+
+```bash
+journalctl --user -u whisper-server | grep -i "using Vulkan"
 ```
 
-#### 5. Configure and start WhisperWriter:
-On first run, a Settings window should appear. Once configured and saved, another window will open. Press "Start" to activate the keyboard listener. Press the activation key (`ctrl+shift+space` by default) to start recording and transcribing to the active window.
+### 5. Lancement
 
-### Configuration Options
+```bash
+./start.sh
+```
 
-WhisperWriter uses a configuration file to customize its behaviour. To set up the configuration, open the Settings window:
+Pour un lanceur, copier `gpu-setup/whisper-writer.desktop` dans
+`~/.local/share/applications/` **en remplaçant le chemin par un chemin absolu** : un
+fichier `.desktop` n'interprète pas `$HOME` dans `Exec`.
 
-<p align="center">
-    <img src="./assets/ww-settings-demo.gif" alt="WhisperWriter Settings window demo gif" width="350" height="350">
-</p>
+## Les trois pièges, et pourquoi ces réglages
 
-#### Model Options
-- `use_api`: Toggle to choose whether to use the OpenAI API or a local Whisper model for transcription. (Default: `false`)
-- `common`: Options common to both API and local models.
-  - `language`: The language code for the transcription in [ISO-639-1 format](https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes). (Default: `null`)
-  - `temperature`: Controls the randomness of the transcription output. Lower values make the output more focused and deterministic. (Default: `0.0`)
-  - `initial_prompt`: A string used as an initial prompt to condition the transcription. More info: [OpenAI Prompting Guide](https://platform.openai.com/docs/guides/speech-to-text/prompting). (Default: `null`)
+Ces trois points sont la vraie valeur de ce dépôt. Sans eux le montage semble marcher,
+puis produit du texte corrompu.
 
-- `api`: Configuration options for the OpenAI API. See the [OpenAI API documentation](https://platform.openai.com/docs/api-reference/audio/create?lang=python) for more information.
-  - `model`: The model to use for transcription. Currently, only `whisper-1` is available. (Default: `whisper-1`)
-  - `base_url`: The base URL for the API. Can be changed to use a local API endpoint, such as [LocalAI](https://localai.io/). (Default: `https://api.openai.com/v1`)
-  - `api_key`: Your API key for the OpenAI API. Required for non-local API usage. (Default: `null`)
+### `-ml 100000` est obligatoire
 
-- `local`: Configuration options for the local Whisper model.
-  - `model`: The model to use for transcription. The larger models provide better accuracy but are slower. See [available models and languages](https://github.com/openai/whisper?tab=readme-ov-file#available-models-and-languages). (Default: `base`)
-  - `device`: The device to run the local Whisper model on. Use `cuda` for NVIDIA GPUs, `cpu` for CPU-only processing, or `auto` to let the system automatically choose the best available device. (Default: `auto`)
-  - `compute_type`: The compute type to use for the local Whisper model. [More information on quantization here](https://opennmt.net/CTranslate2/quantization.html). (Default: `default`)
-  - `condition_on_previous_text`: Set to `true` to use the previously transcribed text as a prompt for the next transcription request. (Default: `true`)
-  - `vad_filter`: Set to `true` to use [a voice activity detection (VAD) filter](https://github.com/snakers4/silero-vad) to remove silence from the recording. (Default: `false`)
-  - `model_path`: The path to the local Whisper model. If not specified, the default model will be downloaded. (Default: `null`)
+`whisper-server` force `max_len = 60` quand on ne précise rien, et découpe **au milieu des
+mots** (`rel\nance`) puisque `split_on_word` est faux par défaut :
 
-#### Recording Options
-- `activation_key`: The keyboard shortcut to activate the recording and transcribing process. Separate keys with a `+`. (Default: `ctrl+shift+space`)
-- `input_backend`: The input backend to use for detecting key presses. `auto` will try to use the best available backend. (Default: `auto`)
-- `recording_mode`: The recording mode to use. Options include `continuous` (auto-restart recording after pause in speech until activation key is pressed again), `voice_activity_detection` (stop recording after pause in speech), `press_to_toggle` (stop recording when activation key is pressed again), `hold_to_record` (stop recording when activation key is released). (Default: `continuous`)
-- `sound_device`: The numeric index of the sound device to use for recording. To find device numbers, run `python -m sounddevice`. (Default: `null`)
-- `sample_rate`: The sample rate in Hz to use for recording. (Default: `16000`)
-- `silence_duration`: The duration in milliseconds to wait for silence before stopping the recording. (Default: `900`)
-- `min_duration`: The minimum duration in milliseconds for a recording to be processed. Recordings shorter than this will be discarded. (Default: `100`)
+```cpp
+// examples/server/server.cpp, v1.9.1
+wparams.max_len = params.max_len == 0 ? 60 : params.max_len;
+```
 
-#### Post-processing Options
-- `writing_key_press_delay`: The delay in seconds between each key press when writing the transcribed text. (Default: `0.005`)
-- `remove_trailing_period`: Set to `true` to remove the trailing period from the transcribed text. (Default: `false`)
-- `add_trailing_space`: Set to `true` to add a space to the end of the transcribed text. (Default: `true`)
-- `remove_capitalization`: Set to `true` to convert the transcribed text to lowercase. (Default: `false`)
-- `input_method`: The method to use for simulating keyboard input. (Default: `pynput`)
+Envoyer `max_len=0` dans la requête n'y change rien — `0` est justement la valeur qui
+déclenche le 60. Il faut une grande valeur au démarrage du serveur.
 
-#### Miscellaneous Options
-- `print_to_terminal`: Set to `true` to print the script status and transcribed text to the terminal. (Default: `true`)
-- `hide_status_window`: Set to `true` to hide the status window during operation. (Default: `false`)
-- `noise_on_completion`: Set to `true` to play a noise after the transcription has been typed out. (Default: `false`)
+### `--vad` contre les hallucinations
 
-If any of the configuration options are invalid or not provided, the program will use the default values.
+Sur un blanc, Whisper invente des génériques de sous-titrage, qui seraient **tapés au
+clavier**. Résultats sur du silence numérique :
 
-## Known Issues
+| Configuration | Sortie |
+|---|---|
+| `medium` | `[Sous-titres réalisés par la communauté d'Amara.org]` |
+| `medium -sns` | `...` (insuffisant) |
+| `large-v3-turbo -sns` | `Sous-titrage Société Radio-Canada` (**aucun effet**) |
+| **`--vad -vm ggml-silero…`** | *(vide)* |
 
-You can see all reported issues and their current status in our [Issue Tracker](https://github.com/savbell/whisper-writer/issues). If you encounter a problem, please [open a new issue](https://github.com/savbell/whisper-writer/issues/new) with a detailed description and reproduction steps, if possible.
+`-sns` (*suppress non-speech tokens*) ne suffit pas. Le VAD est la seule option qui rende
+une chaîne vide — et il court-circuite l'inférence, d'où les 0,01 s.
 
-## Roadmap
-Below are features I am planning to add in the near future:
-- [x] Restructuring configuration options to reduce redundancy
-- [x] Update to use the latest version of the OpenAI API
-- [ ] Additional post-processing options:
-  - [ ] Simple word replacement (e.g. "gonna" -> "going to" or "smiley face" -> "😊")
-  - [ ] Using GPT for instructional post-processing
-- [x] Updating GUI
-- [ ] Creating standalone executable file
+Vérifié : le VAD ne mange pas les dictées courtes (`Oui.` à 0,63 s passe intact).
 
-Below are features not currently planned:
-- [ ] Pipelining audio files
+À noter, ce n'est pas un défaut introduit par ce fork : faster-whisper hallucinait déjà
+(`Sous-titrage ST'501`) avec `vad_filter: false`.
 
-Implemented features can be found in the [CHANGELOG](CHANGELOG.md).
+### Le correctif `merge_segment_line_breaks`
 
-## Contributing
+`whisper-server` joint ses segments par `\n`, là où faster-whisper les concaténait sans
+séparateur, et `post_process_transcription` ne retirait que le dernier. Ces `\n` internes
+partent au clavier :
 
-Contributions are welcome! I created this project for my own personal use and didn't expect it to get much attention, so I haven't put much effort into testing or making it easy for others to contribute. If you have ideas or suggestions, feel free to [open a pull request](https://github.com/savbell/whisper-writer/pulls) or [create a new issue](https://github.com/savbell/whisper-writer/issues/new). I'll do my best to review and respond as time allows.
+- backend `dotool` : `_typewrite_dotool` écrit `f"type {text}\n"` sur stdin, donc un saut
+  de ligne tronque la commande et la fin du texte est perdue ;
+- `pynput` / `wtype` : c'est une touche Entrée parasite, qui valide un formulaire ou envoie
+  un message à moitié écrit.
 
-## Credits
+D'où le commit `fix(transcription): join server segments`.
 
-- [OpenAI](https://openai.com/) for creating the Whisper model and providing the API. Plus [ChatGPT](https://chat.openai.com/), which was used to write a lot of the initial code for this project.
-- [Guillaume Klein](https://github.com/guillaumekln) for creating the [faster-whisper Python package](https://github.com/SYSTRAN/faster-whisper).
-- All of our [contributors](https://github.com/savbell/whisper-writer/graphs/contributors)!
+## Contenu de `gpu-setup/`
 
-## License
+| Fichier | Rôle |
+|---|---|
+| `config.yaml` | à copier en `src/config.yaml` (gitignoré en amont) |
+| `env.example` | à copier en `.env` |
+| `systemd/whisper-server.service` | le service, avec tous les flags qui vont bien |
+| `scripts/serveur.sh` | lancement manuel sur le port 8090, pour expérimenter sans toucher au service |
+| `scripts/dictee.sh` | enregistre au micro et interroge le service, affiche texte et latence |
+| `whisper-writer.desktop` | lanceur (chemin absolu à renseigner) |
 
-This project is licensed under the GNU General Public License. See the [LICENSE](LICENSE) file for details.
+`OPENAI_API_KEY` est **volontairement vide** dans `env.example` : `whisper-server` ignore
+le bearer, et le SDK OpenAI accepte la chaîne vide sans lever d'exception. Ce n'est pas un
+oubli.
+
+## Revenir au CPU
+
+```bash
+systemctl --user disable --now whisper-server.service
+sed -i 's/^  use_api: true/  use_api: false/' src/config.yaml
+```
+
+`compute_type: int8` reste en place comme repli : c'est déjà ×1,9 par rapport au `float32`
+du défaut amont, sans aucun GPU.
+
+## Licence et attribution
+
+GPLv3, comme le projet amont. Ce dépôt est un fork de
+**[savbell/whisper-writer](https://github.com/savbell/whisper-writer)** ; le README
+d'origine est conservé sous [`README.upstream.md`](README.upstream.md).
+
+Modifications par rapport à l'amont :
+
+- `feat(input)` — backends de frappe adaptés à Hyprland/XWayland (`wtype`, `xdotool`, et un
+  mode `auto` qui choisit selon la fenêtre active) ;
+- `fix(transcription)` — jonction des segments renvoyés par le serveur ;
+- `gpu-setup/` — configuration et service, ajoutés par ce fork.
