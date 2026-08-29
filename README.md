@@ -204,9 +204,10 @@ D'où le commit `fix(transcription): join server segments`.
 | `requirements.upstream-utf16.txt` | l'ancien fichier UTF-16 de l'amont, conservé pour mémoire |
 | `whisper-writer.desktop` | lanceur (chemin absolu à renseigner) |
 
-`OPENAI_API_KEY` est **volontairement vide** dans `env.example` : `whisper-server` ignore
-le bearer, et le SDK OpenAI accepte la chaîne vide sans lever d'exception. Ce n'est pas un
-oubli.
+`OPENAI_API_KEY` vaut `'local'` dans `env.example` : une valeur factice, mais **non vide**.
+`whisper-server` ignore le bearer, seul le SDK y regarde — et à partir d'`openai` 3.x une
+clé vide fait lever `OpenAIError: Missing credentials` dès la première dictée. La version
+2.x l'acceptait, d'où un piège qui ne se voit que sur une installation neuve.
 
 ## Revenir au CPU
 
