@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import numpy as np
 import soundfile as sf
 from faster_whisper import WhisperModel
@@ -88,11 +89,14 @@ def transcribe_api(audio_data):
     )
     return response.text
 
+def merge_segment_line_breaks(transcription):
+    return re.sub(r'\s*\n\s*', ' ', transcription)
+
 def post_process_transcription(transcription):
     """
     Apply post-processing to the transcription.
     """
-    transcription = transcription.strip()
+    transcription = merge_segment_line_breaks(transcription).strip()
     post_processing = ConfigManager.get_config_section('post_processing')
     if post_processing['remove_trailing_period'] and transcription.endswith('.'):
         transcription = transcription[:-1]
