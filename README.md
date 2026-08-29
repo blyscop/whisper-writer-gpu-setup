@@ -43,6 +43,11 @@ meilleur de 3 exécutions.
 Soit **×4,1** sur une dictée courte par rapport au CPU déjà optimisé en int8. La colonne GPU
 correspond exactement à la configuration livrée ici (`medium` q5_0, `--vad`, port 8089).
 
+Ces chiffres ont été relevés machine au repos. Sur un GPU **intégré**, la mémoire et les
+unités de calcul sont partagées avec l'affichage : la même dictée mesurée avec un navigateur
+et un IDE actifs monte à ~2,3 s. Le gain sur le CPU reste net dans les deux cas, mais il faut
+s'attendre à cette variabilité — elle n'existerait pas sur une carte dédiée.
+
 Un repère utile : `whisper.cpp` **en CPU** met 6,96 s là où CTranslate2 int8 en met 3,94.
 Le gain vient donc bien du GPU, pas du changement de moteur — comparer au CPU de
 whisper.cpp gonflerait artificiellement le résultat.
