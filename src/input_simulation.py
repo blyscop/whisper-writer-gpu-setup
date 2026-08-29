@@ -51,6 +51,24 @@ class InputSimulator:
             os.kill(self.dotool_process.pid, signal.SIGINT)
             self.dotool_process = None
 
+    def _is_xwayland_focused(self):
+        """
+        Check if the currently focused window is an XWayland window.
+        Returns True for XWayland, False for native Wayland.
+        """
+        try:
+            result = subprocess.run(
+                ["hyprctl", "activewindow", "-j"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            import json
+            window_info = json.loads(result.stdout)
+            return window_info.get("xwayland", False)
+        except:
+            return False  # Default to Wayland native if detection fails
+
     def typewrite(self, text):
         """
         Simulate typing the given text with the specified interval between keystrokes.
@@ -63,8 +81,18 @@ class InputSimulator:
             self._typewrite_pynput(text, interval)
         elif self.input_method == 'ydotool':
             self._typewrite_ydotool(text, interval)
+        elif self.input_method == 'wtype':
+            self._typewrite_wtype(text, interval)
         elif self.input_method == 'dotool':
             self._typewrite_dotool(text, interval)
+        elif self.input_method == 'xdotool':
+            self._typewrite_xdotool(text, interval)
+        elif self.input_method == 'auto':
+            # Auto-detect: use xdotool for XWayland, wtype for Wayland native
+            if self._is_xwayland_focused():
+                self._typewrite_xdotool(text, interval)
+            else:
+                self._typewrite_wtype(text, interval)
 
     def _typewrite_pynput(self, text, interval):
         """
@@ -93,6 +121,44 @@ class InputSimulator:
             "type",
             "--key-delay",
             str(interval * 1000),
+            "--",
+            text,
+        ])
+
+    def _typewrite_wtype(self, text, interval):
+        """
+        Simulate typing using wtype (Wayland native).
+
+        Args:
+            text (str): The text to type.
+            interval (float): The interval between keystrokes in seconds.
+        """
+        try:
+            # Use stdin mode (-) for better UTF-8 handling
+            subprocess.run(
+                ["wtype", "-d", str(int(interval * 1000)), "-"],
+                input=text,
+                text=True,
+                check=True
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"Error running wtype: {e}")
+            exit(1)
+
+    def _typewrite_xdotool(self, text, interval):
+        """
+        Simulate typing using xdotool (for XWayland apps).
+
+        Args:
+            text (str): The text to type.
+            interval (float): The interval between keystrokes in seconds.
+        """
+        run_command_or_exit_on_failure([
+            "xdotool",
+            "type",
+            "--clearmodifiers",
+            "--delay",
+            str(int(interval * 1000)),
             "--",
             text,
         ])

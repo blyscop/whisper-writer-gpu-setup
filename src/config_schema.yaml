@@ -143,10 +143,13 @@ post_processing:
     type: bool
     description: "Set to true to convert the transcribed text to lowercase."
   input_method:
-    value: pynput
+    value: auto
     type: str
-    description: "The method to use for simulating keyboard input."
+    description: "The method to use for simulating keyboard input. 'auto' detects XWayland vs Wayland windows automatically."
     options:
+      - auto
+      - wtype
+      - xdotool
       - pynput
       - ydotool
       - dotool
