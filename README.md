@@ -41,7 +41,9 @@ meilleur de 3 exécutions.
 | silence | — | — | **0,01 s** |
 
 Soit **×4,1** sur une dictée courte par rapport au CPU déjà optimisé en int8. La colonne GPU
-correspond exactement à la configuration livrée ici (`medium` q5_0, `--vad`, port 8089).
+a été relevée avec `medium` q5_0, `--vad`, port 8089. La configuration livrée utilise
+désormais `large-v3-turbo` q5_0 (§ Modèles) : fichier de taille comparable, vitesse du même
+ordre, mais ces chiffres n'ont pas été remesurés avec lui.
 
 Ces chiffres ont été relevés machine au repos. Sur un GPU **intégré**, la mémoire et les
 unités de calcul sont partagées avec l'affichage : la même dictée mesurée avec un navigateur
@@ -72,16 +74,22 @@ Vérifier que la carte est vue : `vulkaninfo --summary | grep deviceName`
 ```bash
 mkdir -p ~/.local/share/whisper-cpp && cd ~/.local/share/whisper-cpp
 
-# modèle de transcription (514 Mo)
-curl -LO https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin
+# modèle de transcription (547 Mo)
+curl -LO https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
 
 # modèle VAD, indispensable contre les hallucinations (0,8 Mo)
 curl -LO https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
 ```
 
-Autres modèles sur [huggingface.co/ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp/tree/main).
-`ggml-large-v3-turbo-q5_0.bin` (547 Mo) a été testé : plus précis pour une vitesse
-équivalente, c'est une bonne alternative.
+`large-v3-turbo` n'est pas un modèle « plus gros » : il reprend l'encodeur de `large-v3`
+(32 couches) avec un décodeur élagué à 4 couches. D'où un fichier à peine plus lourd que
+`medium` (547 contre 514 Mo) pour une meilleure précision à vitesse équivalente. Sa seule
+faiblesse connue est la traduction, inutilisée ici.
+
+`ggml-medium-q5_0.bin` (514 Mo, même dépôt) reste une alternative valable, et les autres
+modèles sont sur [huggingface.co/ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp/tree/main).
+Changer de modèle = éditer le `-m` de l'unité systemd, puis `systemctl --user daemon-reload
+&& systemctl --user restart whisper-server`.
 
 **Les modèles faster-whisper déjà en cache ne servent à rien ici** — ils sont au format
 CTranslate2, il faut du GGML.

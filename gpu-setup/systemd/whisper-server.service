@@ -4,7 +4,7 @@ After=graphical-session.target
 
 [Service]
 ExecStart=/usr/bin/whisper-server \
-  -m %h/.local/share/whisper-cpp/ggml-medium-q5_0.bin \
+  -m %h/.local/share/whisper-cpp/ggml-large-v3-turbo-q5_0.bin \
   -l fr \
   --host 127.0.0.1 --port 8089 \
   --request-path /v1 --inference-path /audio/transcriptions \
